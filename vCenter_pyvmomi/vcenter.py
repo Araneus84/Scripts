@@ -1,5 +1,6 @@
-from pyVim.connect import SmartConnect, Disconnect
 from tkinter import messagebox
+from pyVim.connect import SmartConnect, Disconnect
+from pyvmomi import vim
 import os
 import ssl
 

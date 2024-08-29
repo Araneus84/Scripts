@@ -12,7 +12,7 @@ class PasswordDialog:
         tk.Label(self.top, text="Password:").pack(pady=10)
 
         
-        self.password_entry = tk.Entry(self.root, show="*")
+        self.password_entry = tk.Entry(self, show="*")
         self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.password_entry.pack(padx=10)
         self.password_entry.focus_set()
