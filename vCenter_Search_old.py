@@ -73,11 +73,14 @@ class vSphereSearchApp:
         self.button_remove_server = tk.Button(root, text="Remove Server", command=self.remove_server)
         self.button_remove_server.grid(row=0, column=2, padx=5, pady=5)
 
+<<<<<<< HEAD
         # self.entry_server = tk.Entry(root, width=30)
         # self.entry_server.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
         # Bind Enter
         # self.entry_server.bind("<Return>", lambda event: self.connect_to_vcenter())
 
+=======
+>>>>>>> master
         # Connect button
         self.button_connect = tk.Button(root, text="Connect", command=self.connect_to_vcenter)
         self.button_connect.grid(row=1, column=3, padx=10, pady=5)
@@ -130,7 +133,12 @@ class vSphereSearchApp:
         self.button_export.grid(row=6, column=1, padx=10, pady=5)
 
         # Disconnect Button
+<<<<<<< HEAD
         # self.button_disconnect = tk.Button(root, text="Disconnect", command=self.si.disconnect() )
+=======
+        # self.button_disconnect = tk.Button(root, text="Disconnect", command=self.Disconnect(si))
+        # self.button_disconnect.grid(row=6, column=3, padx=5, pady=5)
+>>>>>>> master
 
     def load_server_list(self):
         """load the list of server from a JSON file,"""
