@@ -110,9 +110,13 @@ class ClipboardTyper(QMainWindow):
                 
         text_to_type = self.input_text.toPlainText().strip()
         if not text_to_type:
-            QMessageBox.warning(self, "Warning", "Please enter text to type")
+            clipboard = QApplication.clipboard()
+            clipboard_text = clipboard.text()
+            if not clipboard_text:
+                QMessageBox.warning(self, "Warning", "Please enter text to type")
+                return
+            self.paste_from_clipboard()
             return
-                
         sleep_seconds = self.sleep_time.value()
         self.status_label.setText(f"Starting in {sleep_seconds} seconds...")
         self.running = True
@@ -125,6 +129,7 @@ class ClipboardTyper(QMainWindow):
         try:
             self.status_label.setText("Now typing...")
             lines = text_to_type.split('\n')
+            first_char = True
             for i, line in enumerate(lines):
                 if not self.running:
                     break
@@ -132,6 +137,10 @@ class ClipboardTyper(QMainWindow):
                 for char in line:
                     if not self.running:
                         break
+                    if first_char:
+                        time.sleep(0.8)
+                        first_char = False
+                        
                     if char in self.special_characters:
                         keys = self.special_characters[char]
                         if len(keys) == 2:
