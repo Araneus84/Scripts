@@ -4,7 +4,6 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QTimer
 import keyboard
 import time
-import pyautogui
 import sys
 
 class ClipboardTyper(QMainWindow):
@@ -12,10 +11,6 @@ class ClipboardTyper(QMainWindow):
         super().__init__()
         self.setWindowTitle("Keyboard Typing Simulator")
         self.running = False
-        
-        # Set pyautogui settings
-        pyautogui.FAILSAFE = True
-        pyautogui.PAUSE = 0.05  # Add a small delay between actions
         
         # Create central widget and layout
         central_widget = QWidget()
