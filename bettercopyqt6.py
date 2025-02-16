@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                             QSpinBox, QCheckBox, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
+import pyautogui
 import keyboard
 import time
 import sys
@@ -124,18 +125,26 @@ class ClipboardTyper(QMainWindow):
         try:
             self.status_label.setText("Now typing...")
             lines = text_to_type.split('\n')
-            first_char = True
+            
+            # Reset keyboard state
+            keyboard.release('shift')
+            keyboard.release('ctrl')
+            keyboard.release('alt')
+            time.sleep(0.8)
+            
             for i, line in enumerate(lines):
                 if not self.running:
                     break
-                    
+                
+                # Force keyboard buffer clear before typing each line
+                keyboard.press_and_release('shift')
+                
+                # Type each character    
                 for char in line:
                     if not self.running:
                         break
-                    if first_char:
-                        time.sleep(0.8)
-                        first_char = False
-                        
+                            
+                    # Force direct character typing instead of write()
                     if char in self.special_characters:
                         keys = self.special_characters[char]
                         if len(keys) == 2:
@@ -151,7 +160,9 @@ class ClipboardTyper(QMainWindow):
                         keyboard.release(char.lower())
                         keyboard.release('shift')
                     else:
-                        keyboard.write(char)
+                        keyboard.press(char)
+                        keyboard.release(char)
+                        
                     QApplication.processEvents()
                     time.sleep(0.05)
                 
@@ -160,12 +171,12 @@ class ClipboardTyper(QMainWindow):
                     time.sleep(0.1)
                 
                 QApplication.processEvents()
-                
+                    
         except Exception as e:
             self.status_label.setText(f"Error typing: {e}")
             self.reset_state("Error occurred")
             return
-            
+                
         self.reset_state("Typing complete" if self.running else "Typing stopped")
 
 def main():
