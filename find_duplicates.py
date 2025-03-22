@@ -24,17 +24,21 @@ from PyQt6.QtGui import QFont
 
 class DuplicateFinderWorker(QThread):
     """Worker thread for finding duplicate files without freezing the GUI"""
-    progress_update = pyqtSignal(int, int, str)  # current, total, current_file
+    progress_update = pyqtSignal(int, int, str, str)  # current, total, current_file, eta_str
     status_update = pyqtSignal(str)
     finished = pyqtSignal(bool, str, dict)  # success, message, results
+    phase1_complete = pyqtSignal(list) # Potenai duplicate files
 
-    def __init__(self, folder_paths, algorithm, min_size_kb=0, max_size_kb=100):
+    def __init__(self, folder_paths, algorithm, min_size_kb=0, max_size_kb=0, excluded_extensions=None, use_fast_scan=True):
         super().__init__()
         self.folder_paths = folder_paths
         self.algorithm = algorithm
         self.min_size_kb = min_size_kb
         self.max_size_kb = max_size_kb
+        self.excluded_extensions = excluded_extensions or []
+        self.use_fast_scan = use_fast_scan
         self.running = True
+        self.wait_for_continue = False
 
     def run(self):
         try:
@@ -53,6 +57,9 @@ class DuplicateFinderWorker(QThread):
                     for root, _, files in os.walk(path):
                         for file in files:
                             file_path = os.path.join(root, file)
+                            file_extension = os.path.splitext(file_path)[1].lower()
+                            if file_extension in self.excluded_extensions:
+                                continue
                             file_size = os.path.getsize(file_path)
                             # Check if file meets size requirements
                             if (self.min_size_kb == 0 or file_size >= (self.min_size_kb * 1024)) and (self.max_size_kb == 0 or file_size <= (self.max_size_kb * 1024)):
@@ -62,6 +69,97 @@ class DuplicateFinderWorker(QThread):
         
             total_files = len(all_files)
             self.status_update.emit(f"Found {total_files} files to process")
+
+            # Phase 1: Fast Scan based on file size and last write time
+            if self.use_fast_scan and total_files > 0:
+                self.status_update.emit("Phase 1: Performing fast scan...")
+
+                # Group files by size
+                size_groups = {}
+                for file_path in all_files:
+                    file_size = os.path.getsize(file_path)
+                    if file_size not in size_groups:
+                        size_groups[file_size] = []
+                    size_groups[file_size].append(file_path)
+
+                # Filter out unique files
+                potential_duplicates = []
+                for size, files in size_groups.items():
+                    if len(files) > 1:
+                        # for files of the same size
+                        time_groups = {}
+                        for file_path in files:
+                            try:
+                                mod_time = os.path.getmtime(file_path)
+                                # Round to nearest second to account for filesystem precision diff
+                                mod_time_rounded = round(mod_time)
+                                if mod_time_rounded not in time_groups:
+                                    time_groups[mod_time_rounded] = []
+                                time_groups[mod_time_rounded].append(file_path)
+                            except Exception as e:
+                                self.status_update.emit(f"Error getting modification time for {file_path}: {str(e)}")
+                                # If we can't get mod time, just add to potential dups
+                                potential_duplicates.append(file_path)
+                            
+                        # Add files with the same size and time
+                        for time_group in time_groups.values():
+                            if len(time_group) > 1:
+                                potential_duplicates.extend(time_group)
+
+                # Update list of files to process
+                if potential_duplicates:
+                    filtered_count = len(potential_duplicates)
+                    self.status_update.emit(f"Fast scan found {filtered_count} potential duplicates out of {total_files} files")
+
+                    # Group potential duplicates by size for display
+                    size_to_files = {}
+                    for file_path in potential_duplicates:
+                        file_size = os.path.getsize(file_path)
+                        if file_size not in size_to_files:
+                            size_to_files[file_size] = []
+                        size_to_files[file_size].append(file_path)
+
+                    # Emit a special message
+                    self.status_update.emit("--- POTENTIAL DUPLICATES ---")
+
+                    # Show potential duplicates by size
+                    for size, files in size_to_files.items():
+                        if len(files) > 1:
+                            self.status_update.emit(f"Size: {self.format_size(size)}")
+                            for file_path in files:
+                                try:
+                                    mod_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
+                                    self.status_update.emit(f"  {file_path} - Mod Time: {mod_time}")
+                                except Exception as e:
+                                    self.status_update.emit(f"  {file_path} - Error getting mod time: {str(e)}")
+                    self.status_update.emit("--- END POTENTIAL DUPLICATES ---")
+
+                    # Emit a signal for phase 1 completion
+                    self.phase1_complete.emit(potential_duplicates)
+
+                    # Pause thread until told to continue
+                    self.wait_for_continue = True
+                    while self.wait_for_continue and self.running:
+                        time.sleep(0.1)
+
+                    # Check if we canceled during the wait
+                    if not self.running:
+                        self.finished.emit(False, "Operation cancelled by user", {})
+                        return
+
+                    # Resume phase 2
+                    all_files = potential_duplicates
+                    self.status_update.emit(f"Starting Phase 2: Calculating hashes for {filtered_count} files")
+
+                    # Reset the progress to show the filtered list
+                    self.progress_update.emit(0, filtered_count, "Starting hash calculation", "Calculating...")
+                else:
+                    self.status_update.emit(f"Fast scan didn't find any dupes based on size and time")
+                    self.finished.emit(True, "No dupes found", {})
+                    return
+            
+            # Phase 2: Calculate hashes
+            self.status_update.emit(f"Phase 2: Calculating hashes for {len(all_files)} files")
         
             # Calculate hashes for all files
             file_hashes = {}
@@ -80,12 +178,12 @@ class DuplicateFinderWorker(QThread):
                 if processed_files > 1:
                     estimated_total_time = elapsed_time / processed_files * total_files
                     remaining_time = estimated_total_time - elapsed_time
-                    eta_str = f"ETA: {self.format_time(remaining_time)}"
+                    eta_str = self.format_time(remaining_time)
                 else:
                     eta_str = "Calculating..."
             
                 # Update progress
-                self.progress_update.emit(processed_files, total_files, file_path)
+                self.progress_update.emit(processed_files, len(all_files), file_path, eta_str)
             
                 # Calculate hash
                 try:
@@ -145,11 +243,23 @@ class DuplicateFinderWorker(QThread):
             hours = int(seconds / 3600)
             minutes = int((seconds % 3600) / 60)
             return f"{hours} hours {minutes} minutes"
-
+    def format_size(self, size_bytes):
+        """Format file size in bytes to human-readable format"""
+        if size_bytes >= 1_000_000_000:
+            return f"{size_bytes / 1_000_000_000:.2f} GB"
+        elif size_bytes >= 1_000_000:
+            return f"{size_bytes / 1_000_000:.2f} MB"
+        elif size_bytes >= 1_000:
+            return f"{size_bytes / 1_000:.2f} KB"
+        else:
+            return f"{size_bytes} bytes"
     def stop(self):
         """Stop the worker thread"""
         self.running = False
-
+    
+    def continue_to_phase2(self):
+        """Resume phase 2 after user confirmation"""
+        self.wait_for_continue = False
 
 class DuplicateFinderApp(QMainWindow):
     def __init__(self):
@@ -192,7 +302,18 @@ class DuplicateFinderApp(QMainWindow):
         # Options group
         options_group = QGroupBox("Options")
         options_layout = QHBoxLayout(options_group)
-    
+
+        # Exclusion list
+        exclusion_group = QGroupBox("Extention Exclusions")
+        exclusion_layout = QVBoxLayout(exclusion_group)
+
+        exclusion_layout.addWidget(QLabel("Enter file extensions to exclude (e.g. jpg, png, pdf):"))
+        self.exclusion_text = QLineEdit()
+        self.exclusion_text.setPlaceholderText(".tmp, .log, .bak")
+        exclusion_layout.addWidget(self.exclusion_text)
+        
+        main_layout.addWidget(exclusion_group)
+        
         # Hash algorithm
         options_layout.addWidget(QLabel("Hash Algorithm:"))
         self.algorithm_combo = QComboBox()
@@ -204,7 +325,7 @@ class DuplicateFinderApp(QMainWindow):
         options_layout.addWidget(QLabel("Minimum Size:"))
         self.min_size_spin = QSpinBox()
         self.min_size_spin.setRange(0, 1000000)
-        self.min_size_spin.setValue(10)
+        self.min_size_spin.setValue(0)
         options_layout.addWidget(self.min_size_spin)
         
         self.size_unit_combo = QComboBox()
@@ -216,13 +337,19 @@ class DuplicateFinderApp(QMainWindow):
         options_layout.addWidget(QLabel("Max Size:"))
         self.max_size_spin = QSpinBox()
         self.max_size_spin.setRange(0, 1000000)
-        self.max_size_spin.setValue(100)
+        self.max_size_spin.setValue(0)
         options_layout.addWidget(self.max_size_spin)
     
         self.size_unit_combo = QComboBox()
         self.size_unit_combo.addItems(["KB", "MB", "GB"])
         self.size_unit_combo.setCurrentText("KB")
         options_layout.addWidget(self.size_unit_combo)
+
+        # Fast scan option
+        self.fast_scan_check = QCheckBox("Use fast pre-scan (Size & date)")
+        self.fast_scan_check.setChecked(True)
+        self.fast_scan_check.setToolTip("First group files by size and date to reduce scan time")
+        options_layout.addWidget(self.fast_scan_check)
     
         # Save results option
         self.save_results_check = QCheckBox("Save results to file")
@@ -324,6 +451,89 @@ class DuplicateFinderApp(QMainWindow):
         # Connect tree selection changed signal
         self.duplicate_tree.itemSelectionChanged.connect(self.update_button_states)
 
+    def phase1_completed(self, potential_duplicates):
+        """Called when phase 1 is complete"""
+        self.potential_duplicates = potential_duplicates
+        
+        # Create message box for the user to proceed
+        msg = QMessageBox()
+        msg.setWindowTitle("Phase 1 Complete")
+        msg.setText(f"Fast scan found {len(potential_duplicates)} potential duplicates")
+        msg.setInformativeText("Fo you want to proceed with hash calculation in phase 2?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+        # Add a button to view potential duplicates
+        view_button = msg.addButton("View Details", QMessageBox.ButtonRole.ActionRole)
+
+        # Show the message box
+        result = msg.exec()
+
+        # Handle the results
+        if msg.clickedButton() == view_button:
+            # Show the details of potential duplicates
+            self.show_potential_duplicates()
+            # Ash again after viewing
+            self.phase1_completed(potential_duplicates)
+        elif result == QMessageBox.StandardButton.Yes:
+            # Proceed to phase 2
+            self.worker.continue_to_phase2()
+        else:
+            # Cancel the operation
+            self.cancel_finding()
+            self.log_message("Operation canceled by user after phase 1.")
+        
+    def show_potential_duplicates(self):
+        """Show a dialog of potential duplicates"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Potential Duplicates")
+        dialog.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+
+        # Add a label
+        layout.addWidget(QLabel(f"Found {len(self.potential_duplicates)} potential duplicates based on size and mod time."))
+
+        # Create a tree widget to display the dupes
+        tree = QTreeWidget()
+        tree.setHeaderLabels(["File Path", "Size", "Modified Time"])
+        layout.addWidget(tree)
+
+        # Group by size
+        size_to_files = {}
+        for file_path in self.potential_duplicates:
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size not in size_to_files:
+                    size_to_files[file_size] = []
+                size_to_files[file_size].append(file_path)
+            except Exception as e:
+                self.log_message(f"Error getting file size for {file_path}: {e}")
+
+        # Add Items to the tree
+        for size, files in size_to_files.items():
+            if len(files) > 1:
+                size_item = QTreeWidgetItem(tree)
+                size_item.setText(0, f"Size: {self.format_size(size)}")
+                size_item.setExpanded(True)
+
+                for file_path in files:
+                    try:
+                        modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+
+                        file_item = QTreeWidgetItem(size_item)
+                        file_item.setText(0, file_path)
+                        file_item.setText(1, self.format_size(size))
+                        file_item.setText(2, modified_time.strftime("%Y-%m-%d %H:%M:%S"))
+                    except Exception as e:
+                        self.log_message(f"Error adding file {file_path} to tree: {e}")
+        # Add OK Button
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)    
+        button_box.accepted.connect(dialog.accept)
+        layout.addWidget(button_box)
+        
+        # Show the dialog
+        dialog.exec()
     def archive_selected_files(self):
         """Archive only the selected files"""
         selected_items = self.duplicate_tree.selectedItems()
@@ -682,7 +892,7 @@ class DuplicateFinderApp(QMainWindow):
                             return
                         
                         # Update progress
-                        self.recheck_worker.progress_update.emit(i + 1, total_files, file_path)
+                        self.recheck_worker.progress_update.emit(i + 1, total_files, file_path, "Rechecking")
                         
                         # Calculate hash
                         try:
@@ -1175,6 +1385,9 @@ class DuplicateFinderApp(QMainWindow):
         """Start the duplicate file finding process"""
         # Get the list of folders to scan
         folder_paths = [self.folder_list.item(i).text() for i in range(self.folder_list.count())]
+
+        # Fast scan option
+        use_fast_scan = self.fast_scan_check.isChecked()
     
         if not folder_paths:
             QMessageBox.warning(self, "Missing Information", "Please add at least one folder to scan.")
@@ -1197,6 +1410,13 @@ class DuplicateFinderApp(QMainWindow):
             min_size_kb = min_size_value
             max_size_kb = max_size_value
         
+        # Exclusion list
+        exclusion_text = self.exclusion_text.text().strip()
+        excluded_extensions = []
+        if exclusion_text:
+            extensions = [ext.strip().lower() for ext in exclusion_text.split(',')]
+            excluded_extensions = [ext if ext.startswith('.') else f'.{ext}' for ext in extensions]
+
         # Clear previous results
         self.results_text.clear()
         self.progress_bar.setValue(0)
@@ -1209,6 +1429,7 @@ class DuplicateFinderApp(QMainWindow):
         self.min_size_spin.setEnabled(False)
         self.max_size_spin.setEnabled(False)
         self.size_unit_combo.setEnabled(False)  # Also disable the unit combo
+        self.exclusion_text.setEnabled(False)
         self.save_results_check.setEnabled(False)
         self.cancel_btn.setEnabled(True)
     
@@ -1218,13 +1439,17 @@ class DuplicateFinderApp(QMainWindow):
         self.log_message(f"Hash algorithm: {algorithm}")
         self.log_message(f"Minimum file size: {min_size_value} {size_unit}")
         self.log_message(f"Maximum file size: {max_size_value} {size_unit}")
+        if excluded_extensions:
+            self.log_message(f"Excluding files with extensions: {', '.join(excluded_extensions)}")
+        self.log_message(f"Fast pre-scan: {'Enabled' if use_fast_scan else 'Disabled'}")
         self.log_message("-" * 50)
     
         # Create and start worker thread
-        self.worker = DuplicateFinderWorker(folder_paths, algorithm, min_size_kb, max_size_kb)
+        self.worker = DuplicateFinderWorker(folder_paths, algorithm, min_size_kb, max_size_kb, excluded_extensions, use_fast_scan)
         self.worker.progress_update.connect(self.update_progress)
         self.worker.status_update.connect(self.log_message)
         self.worker.finished.connect(self.finding_finished)
+        self.worker.phase1_complete.connect(self.phase1_completed)
         self.worker.start()
 
     def cancel_finding(self):
@@ -1233,24 +1458,36 @@ class DuplicateFinderApp(QMainWindow):
             self.log_message("Cancelling operation...")
             self.worker.stop()
 
-    @pyqtSlot(int, int, str)
-    def update_progress(self, current, total, current_file):
+    @pyqtSlot(int, int, str, str)
+    def update_progress(self, current, total, current_file, eta_str):
         """Update the progress bar and current file label"""
         percentage = int((current / total) * 100) if total > 0 else 0
         self.progress_bar.setValue(percentage)
         self.current_file_label.setText(f"Processing: {current_file}")
-        self.status_bar.showMessage(f"Processing file {current} of {total} ({percentage}%)")
+        self.status_bar.showMessage(f"Processing file {current} of {total} ({percentage}%) - ETA: {eta_str}")
 
     @pyqtSlot(str)
     def log_message(self, message):
         """Add a message to the log"""
+        # Check for special markers
+        if message == "--- POTENTIAL DUPLICATES ---":
+            self.results_text.append("\n" + "="*50)
+            self.results_text.append("POTENTIAL DUPLICATES:")
+            self.results_text.append("These files have the same size and mod time")
+            self.results_text.append("="*50 + "\n")
+            return
+        elif message == "--- END POTENTIAL DUPLICATES ---":
+            self.results_text.append("\n" + "="*50)
+            self.results_text.append("END OF POTENTIAL DUPLICATES")
+            self.results_text.append("="*50 + "\n")
+            return
+
         self.results_text.append(message)
         # Scroll to the bottom
         self.results_text.verticalScrollBar().setValue(
             self.results_text.verticalScrollBar().maximum()
         )
-
-    @pyqtSlot(bool, str, dict)
+    # @pyqtSlot(bool, str, dict)
     @pyqtSlot(bool, str, dict)
     def finding_finished(self, success, message, duplicates):
         """Handle completion of the duplicate file finding process"""
@@ -1264,6 +1501,7 @@ class DuplicateFinderApp(QMainWindow):
         self.min_size_spin.setEnabled(True)
         self.max_size_spin.setEnabled(True)
         self.size_unit_combo.setEnabled(True)  # Re-enable the unit combo
+        self.exclusion_text.setEnabled(True)  # Re-enable the exclusion text
         self.save_results_check.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         
