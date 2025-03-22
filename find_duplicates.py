@@ -206,7 +206,7 @@ class DuplicateFinderWorker(QThread):
         except Exception as e:
 
             self.finished.emit(False, f"Error: {str(e)}", {})
-    def get_file_hash(self, file_path, algorithm):
+    def get_file_hash(self, file_path, algorithm, sample_size=1024*1024):
         """Calculate hash for a file using the specified algorithm"""
         try:
             hash_obj = None
@@ -222,16 +222,34 @@ class DuplicateFinderWorker(QThread):
                 hash_obj = hashlib.sha512()
             else:
                 return None
-        
-            with open(file_path, 'rb') as f:
-                # Read the file in chunks to handle large files
-                for chunk in iter(lambda: f.read(4096), b''):
-                    hash_obj.update(chunk)
-        
+            
+            with open(file_path, "rb") as f:
+                # Hash the first few MB
+                hash_obj.update(f.read(sample_size))
+
+                # Optionally hash from the middle
+                f.seek(max(0, os.path.getsize(file_path) // 2 - sample_size // 2))
+                hash_obj.update(f.read(sample_size))
+
+                # Optionally hash from the end
+                f.seek(max(0, os.path.getsize(file_path) - sample_size))
+                hash_obj.update(f.read(sample_size))
+            
             return hash_obj.hexdigest()
         except Exception as e:
             self.status_update.emit(f"Could not hash file: {file_path} - {str(e)}")
             return None
+            
+        
+        #     with open(file_path, 'rb') as f:
+        #         # Read the file in chunks to handle large files
+        #         for chunk in iter(lambda: f.read(4096), b''):
+        #             hash_obj.update(chunk)
+        
+        #     return hash_obj.hexdigest()
+        # except Exception as e:
+        #     self.status_update.emit(f"Could not hash file: {file_path} - {str(e)}")
+        #     return None
 
     def format_time(self, seconds):
         """Format seconds into a human-readable time string"""
@@ -690,7 +708,7 @@ class DuplicateFinderApp(QMainWindow):
                     tree.setItemWidget(file_item, 3, radio)
                 except Exception as e:
                     self.log_message(f"Error processing file: {file_path} - {str(e)}")
-        
+
         # Add OK/Cancel buttons
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
