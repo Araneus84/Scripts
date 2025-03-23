@@ -55,6 +55,9 @@ class DuplicateFinderWorker(QThread):
             for path in self.folder_paths:
                 try:
                     for root, _, files in os.walk(path):
+                        if not self.running:
+                            self.finished.emit(False, "Operation canceled by user.", {})
+                            return
                         for file in files:
                             file_path = os.path.join(root, file)
                             file_extension = os.path.splitext(file_path)[1].lower()
@@ -77,6 +80,9 @@ class DuplicateFinderWorker(QThread):
                 # Group files by size
                 size_groups = {}
                 for file_path in all_files:
+                    if not self.running:
+                        self.finished.emit(False, "Operation canceled by user.", {})
+                        return
                     file_size = os.path.getsize(file_path)
                     if file_size not in size_groups:
                         size_groups[file_size] = []
@@ -299,22 +305,26 @@ class DuplicateFinderApp(QMainWindow):
         # Folder selection group
         folder_group = QGroupBox("Folders to Scan")
         folder_layout = QVBoxLayout(folder_group)
+
+        # Add folder input
+        folder_input_layout = QHBoxLayout()
+        self.folder_input = QLineEdit()
+        self.folder_input.setPlaceholderText("Enter folder path...")
+        self.folder_input.returnPressed.connect(self.add_typed_folder)
+        folder_input_layout.addWidget(self.folder_input)
+
+        browse_folder_btn = QPushButton("Browse")
+        browse_folder_btn.clicked.connect(self.browse_folder)
+        folder_input_layout.addWidget(browse_folder_btn)
+
+        folder_layout.addLayout(folder_input_layout)
     
-        # Folder list
+        # Folder list with context menu
         self.folder_list = QListWidget()
+        self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.folder_list.customContextMenuRequested.connect(self.show_folder_context_menu)
         folder_layout.addWidget(self.folder_list)
-    
-        # Add/Remove buttons
-        btn_layout = QHBoxLayout()
-        add_folder_btn = QPushButton("Add Folder")
-        add_folder_btn.clicked.connect(self.add_folder)
-        btn_layout.addWidget(add_folder_btn)
-    
-        remove_folder_btn = QPushButton("Remove Folder")
-        remove_folder_btn.clicked.connect(self.remove_folder)
-        btn_layout.addWidget(remove_folder_btn)
-    
-        folder_layout.addLayout(btn_layout)
+
         main_layout.addWidget(folder_group)
     
         # Options group
@@ -378,14 +388,15 @@ class DuplicateFinderApp(QMainWindow):
     
         # Find duplicates and cancel buttons
         button_layout = QHBoxLayout()
-        self.find_btn = QPushButton("Find Duplicates")
-        self.find_btn.clicked.connect(self.start_finding)
-        button_layout.addWidget(self.find_btn)
-    
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.cancel_finding)
-        self.cancel_btn.setEnabled(False)
-        button_layout.addWidget(self.cancel_btn)
+        self.action_btn = QPushButton("Find Duplicates")
+        self.action_btn.clicked.connect(self.toggle_action)
+        self.action_btn.setMinimumHeight(40)
+        font = self.action_btn.font()
+        font.setPointSize(font.pointSize() + 2)
+        font.setBold(True)
+        self.action_btn.setStyleSheet("background-color: #4CAF50")
+        self.action_btn.setFont(font)
+        button_layout.addWidget(self.action_btn)
     
         main_layout.addLayout(button_layout)
     
@@ -426,6 +437,71 @@ class DuplicateFinderApp(QMainWindow):
     
         # Show the window
         self.show()
+
+    def toggle_action(self):
+        if self.action_btn.text() == "Find Duplicates":
+            self.start_finding()
+        else:
+            self.cancel_finding()
+    
+    def add_typed_folder(self):
+        folder_path = self.folder_input.text().strip()
+        if folder_path:
+            # Check if folder exists
+            if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+                QMessageBox.warning(self, "Invalid Folder", f"The specified folder does not exist: {folder_path}")
+                return
+
+            # Check if folder already in the list
+            existing_items = [self.folder_list.item(i).text() for i in  range(self.folder_list.count())]
+            if folder_path not in existing_items:
+                self.folder_list.addItem(folder_path)
+
+            # Clear the input field
+            self.folder_input.clear()
+
+    def browse_folder(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder_path:
+            existing_items = [self.folder_list.item(i).text() for i in  range(self.folder_list.count())]
+            if folder_path not in existing_items:
+                self.folder_list.addItem(folder_path)
+
+    def show_folder_context_menu(self, position):
+        menu = QMenu(self)
+
+        # Only enable remove item if something is selected
+        if self.folder_list.selectedItems():
+            remove_action = menu.addAction("Remove Folder")
+            open_action = menu.addAction("Open in Explorer")
+
+            action = menu.exec(self.folder_list.mapToGlobal(position))
+
+            if action == remove_action:
+                self.remove_folder()
+            elif action == open_action:
+                self.open_folder_in_explorer()
+
+    def open_folder_in_explorer(self):
+        selected_items = self.folder_list.selectedItems()
+        if selected_items:
+            folder_path = selected_items[0].text()
+            if os.path.exists(folder_path):
+                if sys.platform.startswith('win'):
+                    os.startfile(folder_path)
+                elif sys.platform.startswith('darwin'):
+                    subprocess.Popen(["open", folder_path])
+                elif sys.platform.startswith('linux'):
+                    subprocess.Popen(["xdg-open", folder_path])
+            else:
+                QMessageBox.warning(self, "Invalid Folder", f"The selected folder does not exist: {folder_path}")
+    
+    def remove_folder(self):
+        selected_items = self.folder_list.selectedItems()
+        if selected_items:
+            for item in selected_items:
+                self.folder_list.takeItem(self.folder_list.row(item))
+    
     def add_duplicate_management_features(self):
         """Add duplicate management features to the UI"""
         # Add a tree view for duplicate sets
@@ -500,6 +576,10 @@ class DuplicateFinderApp(QMainWindow):
             # Cancel the operation
             self.cancel_finding()
             self.log_message("Operation canceled by user after phase 1.")
+
+            # Make the button reset back to "Find Duplicates"
+            self.action_btn.setText("Find Duplicates")
+            self.action_btn.setStyleSheet("")
         
     def show_potential_duplicates(self):
         """Show a dialog of potential duplicates"""
@@ -946,13 +1026,11 @@ class DuplicateFinderApp(QMainWindow):
             self.recheck_worker.start()
             
             # Disable UI elements during processing
-            self.find_btn.setEnabled(False)
             self.folder_list.setEnabled(False)
             self.algorithm_combo.setEnabled(False)
             self.min_size_spin.setEnabled(False)
             self.max_size_spin.setEnabled(False)
             self.save_results_check.setEnabled(False)
-            self.cancel_btn.setEnabled(True)
             self.browse_btn.setEnabled(False)
             self.recheck_btn.setEnabled(False)
             self.archive_btn.setEnabled(False)
@@ -961,13 +1039,11 @@ class DuplicateFinderApp(QMainWindow):
     def recheck_finished(self, success, message, duplicates):
         """Handle completion of the recheck process"""
         # Re-enable UI elements
-        self.find_btn.setEnabled(True)
         self.folder_list.setEnabled(True)
         self.algorithm_combo.setEnabled(True)
         self.min_size_spin.setEnabled(True)
         self.max_size_spin.setEnabled(True)
         self.save_results_check.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
         self.update_button_states()
         
         if success:
@@ -1439,9 +1515,12 @@ class DuplicateFinderApp(QMainWindow):
         self.results_text.clear()
         self.progress_bar.setValue(0)
         self.current_file_label.setText("Starting scan...")
+
+        # Change button to "Cancel"
+        self.action_btn.setText("Cancel")
+        self.action_btn.setStyleSheet("background-color: #ffcccc;")
     
         # Disable UI elements during processing
-        self.find_btn.setEnabled(False)
         self.folder_list.setEnabled(False)
         self.algorithm_combo.setEnabled(False)
         self.min_size_spin.setEnabled(False)
@@ -1449,7 +1528,6 @@ class DuplicateFinderApp(QMainWindow):
         self.size_unit_combo.setEnabled(False)  # Also disable the unit combo
         self.exclusion_text.setEnabled(False)
         self.save_results_check.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
     
         # Log start of operation
         self.log_message("Starting duplicate file search...")
@@ -1475,6 +1553,10 @@ class DuplicateFinderApp(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.log_message("Cancelling operation...")
             self.worker.stop()
+
+            self.action_btn.setText("Cencelling.")
+            self.action_btn.setEnabled(False)
+            self.action_btn.setStyleSheet("background-color: #ccc;")
 
     @pyqtSlot(int, int, str, str)
     def update_progress(self, current, total, current_file, eta_str):
@@ -1511,9 +1593,13 @@ class DuplicateFinderApp(QMainWindow):
         """Handle completion of the duplicate file finding process"""
         # Store duplicates for later use
         self.duplicates = duplicates
+
+        # Reset button to "Find Duplicates"
+        self.action_btn.setText("Find Duplicates")
+        self.action_btn.setStyleSheet("background-color: #4CAF50;")
+        self.action_btn.setEnabled(True)
         
         # Re-enable UI elements
-        self.find_btn.setEnabled(True)
         self.folder_list.setEnabled(True)
         self.algorithm_combo.setEnabled(True)
         self.min_size_spin.setEnabled(True)
@@ -1521,7 +1607,6 @@ class DuplicateFinderApp(QMainWindow):
         self.size_unit_combo.setEnabled(True)  # Re-enable the unit combo
         self.exclusion_text.setEnabled(True)  # Re-enable the exclusion text
         self.save_results_check.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
         
         # Log completion message
         self.log_message("-" * 50)
