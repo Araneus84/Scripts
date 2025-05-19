@@ -4,12 +4,13 @@ import string
 from PyQt6.QtGui import QClipboard
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QGuiApplication
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QListWidget
 
 class PasswordGenerator(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Random Password Generator")
+        self.history = []
         self.init_ui()
 
     def init_ui(self):
@@ -42,9 +43,11 @@ class PasswordGenerator(QWidget):
         layout.addLayout(options_layout)
 
         # Password display
-        self.password_edit = QLineEdit()
-        self.password_edit.setReadOnly(True)
-        layout.addWidget(self.password_edit)
+        self.password_list = QListWidget()
+        layout.addWidget(self.password_list)
+        # self.password_edit = QLineEdit()
+        # self.password_edit.setReadOnly(True)
+        # layout.addWidget(self.password_edit)
 
         # Buttons
         buttons_layout = QHBoxLayout()
@@ -73,15 +76,23 @@ class PasswordGenerator(QWidget):
             chars += string.punctuation
 
         if not chars:
-            self.password_edit.setText("Select at least one option!")
+            self.password_list.clear()
+            self.password_list.addItem("Select at least one option!")
             return
 
-        password = ''.join(random.choice(chars) for _ in range(length))
-        self.password_edit.setText(password)
+        password = [''.join(random.choice(chars) for _ in range(length)) for _ in range(5)]
+        self.password_list.clear()
+        self.password_list.addItems(password)
+
+        self.history.append(password)
+        if len(self.history) > 10:
+            self.history.pop(0)
 
     def copy_password(self):
-        clipboard = QApplication.instance().clipboard()
-        clipboard.setText(self.password_edit.text())
+        selected_items = self.password_list.currentItem()
+        if selected_items:
+            clipboard = QApplication.instance().clipboard()
+            clipboard.setText(selected_items.text())
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
