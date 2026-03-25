@@ -292,6 +292,10 @@ python utm9_export.py
 | `tkinter_aaa.py` | Tkinter UI component prototype |
 | `testing.py` | Development test harness |
 | `main.py` | Generic entry-point script |
+| `TreeSizeClone/main.py` | PyQt6 folder tree with sizes (TreeSize-style scanner) |
+| `doc_compare/` | Document comparison app (PyQt6 UI + extractors) |
+| `Robocopy_GUI.py` | GUI for Windows `robocopy` with saved profiles (`robo_config.json`) |
+| `ntfsaccess.ps1` | NTFS inheritance / permissions helper (requires `NTFSAccess` module) |
 
 ---
 
@@ -319,6 +323,10 @@ Scripts/
 ├── get_folder_sizes.ps1        # Folder size analyzer
 ├── pass_gen.py                 # Password generator GUI (Tkinter)
 ├── utm9_export.py              # Sophos UTM9 config backup via REST API
+├── TreeSizeClone/              # Folder size tree (PyQt6)
+├── doc_compare/                # Document comparison app
+├── Robocopy_GUI.py             # Robocopy GUI
+├── ntfsaccess.ps1              # NTFS permissions helper
 └── ...
 ```
 
